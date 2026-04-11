@@ -1,0 +1,12 @@
+build/
+*.o
+*.a
+*.so
+*.dll
+*.exe
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CTestTestfile.cmake
+*.vcxproj.user
+.vs/
