@@ -13,3 +13,4 @@ CTestTestfile.cmake
 test_identity_keydir/
 test_server_keydir/
 test_gossip_keydir/
+test_wsclient_keydir/

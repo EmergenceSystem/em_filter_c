@@ -206,15 +206,14 @@ int em_ws_connect(em_ws_t *ws, const char *host, int port, int tls,
     return 0;
 }
 
-/* ── Public: send text frame (RFC 6455 §5.2, client → server, masked) ── */
+/* ── Frame writer (RFC 6455 §5.2, client → server, always masked) ──────── */
 
-int em_ws_send_text(em_ws_t *ws, const char *text) {
-    size_t payload_len = strlen(text);
-
+static int send_frame(em_ws_t *ws, unsigned char opcode,
+                       const unsigned char *payload, size_t payload_len) {
     /* Header: max 10 bytes + 4-byte mask + payload */
     unsigned char header[10];
     int header_len = 0;
-    header[0] = 0x81;  /* FIN=1, opcode=0x1 (text) */
+    header[0] = (unsigned char)(0x80 | opcode);  /* FIN=1 */
 
     if (payload_len <= 125) {
         header[1] = (unsigned char)(0x80 | payload_len);
@@ -241,11 +240,17 @@ int em_ws_send_text(em_ws_t *ws, const char *text) {
     memcpy(buf, header, (size_t)header_len);
     memcpy(buf + header_len, mask, 4);
     for (size_t i = 0; i < payload_len; i++)
-        buf[header_len + 4 + i] = (unsigned char)text[i] ^ mask[i % 4];
+        buf[header_len + 4 + i] = payload[i] ^ mask[i % 4];
 
     int ret = sock_write(ws, buf, total);
     free(buf);
     return ret;
+}
+
+/* ── Public: send text frame ─────────────────────────────────────────── */
+
+int em_ws_send_text(em_ws_t *ws, const char *text) {
+    return send_frame(ws, 0x1, (const unsigned char *)text, strlen(text));
 }
 
 /* ── Public: receive one text frame (server → client, unmasked) ─────── */
@@ -285,7 +290,8 @@ char *em_ws_recv_text(em_ws_t *ws) {
         }
 
         if (opcode == 0x8) { free(payload); return NULL; }  /* CLOSE */
-        if (opcode == 0x9) { /* PING — ignore, discard payload */
+        if (opcode == 0x9) { /* PING — keepalive: reply PONG with same payload (RFC 6455 §5.5.3) */
+            send_frame(ws, 0xA, (const unsigned char *)payload, (size_t)plen);
             free(payload); continue;
         }
         if (opcode == 0xa) { /* PONG — ignore */

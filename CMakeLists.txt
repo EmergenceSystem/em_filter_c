@@ -19,6 +19,7 @@ add_library(em_filter STATIC
     src/gossip.c
     src/http_client.c
     src/websocket.c
+    src/wsclient.c
     src/connection.c
     src/html.c
     third_party/cJSON.c
@@ -62,3 +63,7 @@ add_test(NAME test_server COMMAND test_server)
 add_executable(test_gossip tests/test_gossip.c)
 target_link_libraries(test_gossip PRIVATE em_filter)
 add_test(NAME test_gossip COMMAND test_gossip)
+
+add_executable(test_wsclient tests/test_wsclient.c)
+target_link_libraries(test_wsclient PRIVATE em_filter)
+add_test(NAME test_wsclient COMMAND test_wsclient)
