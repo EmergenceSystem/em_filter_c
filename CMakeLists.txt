@@ -16,6 +16,8 @@ add_library(em_filter STATIC
     src/crypto.c
     src/identity.c
     src/server.c
+    src/gossip.c
+    src/http_client.c
     src/websocket.c
     src/connection.c
     src/html.c
@@ -56,3 +58,7 @@ add_test(NAME test_identity COMMAND test_identity)
 add_executable(test_server tests/test_server.c)
 target_link_libraries(test_server PRIVATE em_filter)
 add_test(NAME test_server COMMAND test_server)
+
+add_executable(test_gossip tests/test_gossip.c)
+target_link_libraries(test_gossip PRIVATE em_filter)
+add_test(NAME test_gossip COMMAND test_gossip)
