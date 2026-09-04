@@ -221,14 +221,68 @@ int em_resolve_nodes(const em_config_t *cfg,
     return 1;
 }
 
-/* ── Public: resolve JWT ───────────────────────────────────────────────── */
+/* ── Public: §4.3 mode dispatch + Model A/B knobs ───────────────────────── */
 
-void em_resolve_jwt(const em_config_t *cfg, char out_jwt[512]) {
-    out_jwt[0] = '\0';
-    if (cfg && cfg->jwt_token[0] != '\0') {
-        strncpy(out_jwt, cfg->jwt_token, 511);
+void em_resolve_mode(const em_config_t *cfg, char out_mode[16]) {
+    if (cfg && cfg->mode[0] != '\0') {
+        strncpy(out_mode, cfg->mode, 15);
+        out_mode[15] = '\0';
         return;
     }
-    const char *env = getenv("EM_FILTER_JWT_TOKEN");
-    if (env) strncpy(out_jwt, env, 511);
+    const char *env = getenv("EM_FILTER_MODE");
+    if (env && *env) {
+        strncpy(out_mode, env, 15);
+        out_mode[15] = '\0';
+        return;
+    }
+    strcpy(out_mode, "relay"); /* spec §4.3: default when the contributor sets nothing */
+}
+
+void em_resolve_key_dir(const em_config_t *cfg, const char *name, char *out, size_t out_cap) {
+    if (cfg && cfg->key_dir[0] != '\0') {
+        strncpy(out, cfg->key_dir, out_cap - 1);
+        out[out_cap - 1] = '\0';
+        return;
+    }
+    const char *env = getenv("EM_FILTER_KEY_DIR");
+    if (env && *env) {
+        strncpy(out, env, out_cap - 1);
+        out[out_cap - 1] = '\0';
+        return;
+    }
+    snprintf(out, out_cap, "./empop_key_%s/", name);
+}
+
+void em_resolve_advertise_host(const em_config_t *cfg, char *out, size_t out_cap) {
+    if (cfg && cfg->advertise_host[0] != '\0') {
+        strncpy(out, cfg->advertise_host, out_cap - 1);
+        out[out_cap - 1] = '\0';
+        return;
+    }
+    const char *env = getenv("EM_FILTER_HOST");
+    if (env && *env) {
+        strncpy(out, env, out_cap - 1);
+        out[out_cap - 1] = '\0';
+        return;
+    }
+    strcpy(out, "0.0.0.0");
+}
+
+int em_resolve_query_port(const em_config_t *cfg) {
+    if (cfg && cfg->query_port > 0) return cfg->query_port;
+    const char *env = getenv("EM_FILTER_QUERY_PORT");
+    if (env) {
+        int v = atoi(env);
+        if (v > 0) return v;
+    }
+    return 8090;
+}
+
+int em_gossip_interval_ms(void) {
+    const char *env = getenv("EM_FILTER_GOSSIP_INTERVAL_MS");
+    if (env) {
+        int v = atoi(env);
+        if (v > 0) return v;
+    }
+    return 5000;
 }

@@ -51,16 +51,38 @@ typedef struct em_handler {
 
 /* ── Config ──────────────────────────────────────────────────────────────── */
 
+/*
+ * A disco endpoint. Doubles as a Model B relay target
+ * (wss://host:port/ws/filter) and a Model A gossip seed
+ * (POST host:port/pop/gossip) — same mesh entry points, either transport.
+ */
 typedef struct em_disco_node {
     char host[256];
     int  port;
-    int  tls;   /* 1 = wss://, 0 = ws:// */
+    int  tls;   /* 1 = wss:// / https://, 0 = ws:// / http:// */
 } em_disco_node_t;
 
 typedef struct em_config {
-    char             jwt_token[512]; /* empty = read EM_FILTER_JWT_TOKEN env var */
-    em_disco_node_t *nodes;          /* explicit node list (NULL = auto-resolve) */
+    em_disco_node_t *nodes;             /* explicit disco list (NULL = auto-resolve via env/emergence.conf) */
     int              nodes_len;
+
+    /* §4.3 mode dispatch: "relay" (default) | "direct" | "both".
+     * Empty = read EM_FILTER_MODE env var, else "relay". */
+    char             mode[16];
+
+    /* Key directory (pub(32)||seed(32), created on first run if absent).
+     * Empty = read EM_FILTER_KEY_DIR env var, else "./empop_key_<name>/". */
+    char             key_dir[256];
+
+    /* Model A/both only: the host advertised in gossip payloads for inbound
+     * /agent/query reachability. Empty = read EM_FILTER_HOST env var, else
+     * "0.0.0.0" (rarely useful as an advertised address — set this or the
+     * env var to a real reachable host/IP for direct mode to work). */
+    char             advertise_host[256];
+
+    /* Model A/both only: HTTP server port. 0 = read EM_FILTER_QUERY_PORT
+     * env var, else 8090. */
+    int              query_port;
 } em_config_t;
 
 /* ── Lifecycle ───────────────────────────────────────────────────────────── */
@@ -76,8 +98,11 @@ em_filter_t *em_filter_create(const char *agent_name,
                                em_config_t  *config);
 
 /**
- * Connect to all resolved disco nodes and run forever.
- * Blocks until all connection threads exit (not expected in normal operation).
+ * Loads/creates the ed25519 identity, then starts the transport(s) selected
+ * by mode dispatch (§4.3): "relay" opens outbound WS session(s) to each
+ * resolved disco node; "direct" starts the Model A HTTP server plus the
+ * gossip push loop; "both" starts all of them. Blocks forever (not expected
+ * to return in normal operation).
  */
 void em_filter_run(em_filter_t *runner);
 
