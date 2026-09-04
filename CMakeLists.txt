@@ -14,6 +14,7 @@ add_library(em_filter STATIC
     src/em_filter.c
     src/config.c
     src/crypto.c
+    src/identity.c
     src/websocket.c
     src/connection.c
     src/html.c
@@ -46,3 +47,7 @@ target_link_libraries(test_crypto PRIVATE em_filter)
 target_compile_definitions(test_crypto PRIVATE
     FIXTURE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/crypto_vectors.json")
 add_test(NAME test_crypto COMMAND test_crypto)
+
+add_executable(test_identity tests/test_identity.c)
+target_link_libraries(test_identity PRIVATE em_filter)
+add_test(NAME test_identity COMMAND test_identity)
