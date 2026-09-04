@@ -4,59 +4,65 @@
 
 C SDK for building [Emergence](https://github.com/EmergenceSystem) network agents.
 
-`em_filter_c` lets any C process join the Emergence distributed discovery network
-as a **filter agent** — a service that receives search queries from the `em_disco`
-broker, processes them (web search, DNS lookup, database query, …), and returns
-structured results.
+`em_filter_c` lets any C process join the Emergence distributed discovery
+network as a **filter agent** — a service that receives search queries from
+the mesh (`em_disco` + Emquest), processes them (web search, DNS lookup,
+database query, …), and returns ed25519-signed structured results.
 
-This library is the C equivalent of the Erlang `em_filter` library: same WebSocket
-protocol, same configuration contract, minimal C99 API.
+This is the mesh-parity SDK: same crypto and wire protocol as the Erlang
+`em_filter` leaf library, byte-identical (verified against a shared
+cross-language test-vector fixture), and speaking the current signed
+`em_pop`/`em_disco` mesh — see [PROTOCOL.md](PROTOCOL.md) for the full wire
+format.
 
 ---
 
 ## How it works
 
 ```
- ┌─────────────┐    WebSocket     ┌───────────────┐    WebSocket     ┌─────────────┐
- │  em_disco   │ ◄─────────────── │  em_filter_t  │ ───────────────► │  em_disco   │
- │  (broker)   │  query / result  │  (your agent) │  (multi-node)    │  (replica)  │
- └─────────────┘                  └───────────────┘                  └─────────────┘
-                                         │
-                                  thread per node
-                                         │
-                                  ┌──────┴──────┐
+ Model B (default, NAT-friendly)          Model A (direct, needs a reachable port)
+ ┌─────────────┐   outbound WS    ┌──────────────┐   ┌─────────────┐  inbound HTTP  ┌──────────────┐
+ │  em_disco   │ ◄─────────────── │ em_filter_t  │   │  em_disco   │ ─────────────► │ em_filter_t  │
+ │  (relay)    │  hello/query/    │ (your agent) │   │  (seed)     │ /agent/query   │ (your agent) │
+ └─────────────┘  result          └──────────────┘   └─────────────┘ ◄───────────── │  + gossip    │
+                                         │                                   push    │  push loop   │
+                                  ┌──────┴──────┐                                    └──────────────┘
                                   │ em_handle_fn│
                                   │  callback   │
                                   └─────────────┘
 ```
 
 1. `em_filter_create()` builds a runner with your handler callback.
-2. `em_filter_run()` connects to all resolved disco nodes (one thread per node) and blocks.
-3. Each thread calls your `em_handle_fn` on every `query` frame and sends back a `result`.
+2. `em_filter_run()` loads/creates the ed25519 identity, then starts the
+   transport(s) selected by `EM_FILTER_MODE` (§ [Modes](#modes)) and blocks.
+3. Your `em_handle_fn` runs on every query and returns results; the SDK
+   signs them (ed25519) before sending them back.
+
+Every response is signed and verified by Emquest against the mesh-bound
+public key — an unsigned or unbound-signer response is dropped under
+`require_signatures = true`.
 
 ---
 
 ## Requirements
 
-- C99 compiler (GCC, Clang, MSVC)
-- CMake 3.20+
-- OpenSSL (for WebSocket TLS; install via system package manager or [vcpkg](https://vcpkg.io/))
-- [cJSON](https://github.com/DaveGamble/cJSON) — bundled in `third_party/` (no extra install needed)
+- C11 compiler (GCC, Clang) — targets Linux/macOS via pthreads; a portable
+  thread/socket layer is in place for a future Windows build but is
+  untested there.
+- CMake 3.16+
+- OpenSSL (WebSocket TLS + SHA-1 handshake) and **libsodium** (ed25519 +
+  SHA-256, via `pkg-config`)
+- [cJSON](https://github.com/DaveGamble/cJSON) — bundled in `third_party/`
+  (no extra install needed)
 
 ---
 
 ## Building
 
 ```bash
-mkdir build && cd build
-
-# Linux / macOS
-cmake ..
-cmake --build . --config Release
-
-# Windows with vcpkg
-cmake .. -DOPENSSL_ROOT_DIR=C:/vcpkg/installed/x64-windows
-cmake --build . --config Release
+cmake -B build
+cmake --build build
+ctest --test-dir build --output-on-failure
 ```
 
 To use the library in your own CMake project:
@@ -73,21 +79,16 @@ target_link_libraries(my_filter PRIVATE em_filter)
 ```c
 #include "em_filter.h"
 #include <stdio.h>
-#include <string.h>
 
-static const char *MY_CAPS[] = {"search", "query", NULL};
+static const char *MY_CAPS[] = {"search", "query"};
 
 static em_result_t my_handle(const char *body, cJSON *memory, void *ctx) {
-    /* Build result: a JSON array of embryo objects */
     cJSON *result = cJSON_CreateArray();
-    cJSON *embryo = cJSON_CreateObject();
-    cJSON *props  = cJSON_CreateObject();
-
-    cJSON_AddStringToObject(props, "url",   "https://example.com");
-    cJSON_AddStringToObject(props, "title", body); /* or format a real title */
-    cJSON_AddStringToObject(embryo, "type", "url");
-    cJSON_AddItemToObject(embryo, "properties", props);
-    cJSON_AddItemToArray(result, embryo);
+    cJSON *item = cJSON_CreateObject();
+    cJSON_AddStringToObject(item, "url",    "https://example.com");
+    cJSON_AddStringToObject(item, "title",  body);
+    cJSON_AddStringToObject(item, "resume", "matched your query");
+    cJSON_AddItemToArray(result, item);
 
     return (em_result_t){ .result = result, .new_memory = NULL };
 }
@@ -99,17 +100,19 @@ int main(void) {
         .capabilities_len = 2,
         .ctx              = NULL,
     };
-    em_config_t config = { 0 };   /* all defaults */
+    em_config_t config = {0};   /* all defaults: EM_FILTER_MODE=relay */
 
     em_filter_t *runner = em_filter_create("my_filter", &handler, &config);
-    em_filter_run(runner);         /* blocks forever */
+    em_filter_run(runner);       /* blocks forever */
     em_filter_destroy(runner);
     return 0;
 }
 ```
 
-By default the agent connects to `localhost:8080`. Override via environment
-variables or `em_config_t` — see [Configuration](#configuration).
+By default the agent relays through `localhost:8080`. Override via
+environment variables or `em_config_t` — see [Configuration](#configuration).
+
+See `examples/echo_filter.c` for a runnable version.
 
 ---
 
@@ -121,37 +124,47 @@ typedef em_result_t (*em_handle_fn)(const char *body, cJSON *memory, void *ctx);
 
 | Parameter | Description |
 |-----------|-------------|
-| `body` | Null-terminated query string from `em_disco` |
-| `memory` | Current memory state (cJSON object, SDK-owned — **do not free**) |
-| `ctx` | Opaque user pointer passed to `em_filter_create` via `em_handler_t.ctx` |
+| `body` | Null-terminated query string |
+| `memory` | Current memory state (cJSON object, SDK-owned — **do not free**); persists across reconnects (Model B) or the process lifetime (Model A) |
+| `ctx` | Opaque user pointer passed via `em_handler_t.ctx` |
 
 Returns `em_result_t`:
 
 ```c
 typedef struct em_result {
-    cJSON *result;      /* JSON to send as "data"; SDK frees after sending */
+    cJSON *result;      /* items array; SDK signs + sends it, then frees it */
     cJSON *new_memory;  /* next memory state; NULL = keep current memory */
 } em_result_t;
 ```
 
-The SDK takes ownership of `result` and `new_memory` — do not free them yourself.
+The SDK takes ownership of `result` and `new_memory` — do not free them
+yourself.
 
 ### Result format
 
-`result` is typically a cJSON array of **embryo** objects:
-
-| Type | Required properties |
-|------|---------------------|
-| `"url"` | `url`, `title` |
-| `"dns"` | `domain`, `ips` |
-| `"text"` | `content` |
-
-`cJSON_CreateNull()` or an empty array means "no results for this query".
+`result` is a cJSON array of items. Each item's `url` / `title` (or
+`label`) / `resume` (or `value`/`description`) fields — read either
+straight off the item or from its `properties` sub-object if present — are
+what get signed (see [PROTOCOL.md § canonical_response](PROTOCOL.md#1-identity--crypto)).
+An empty array means "no results for this query".
 
 ### Capabilities
 
-`em_handler_t.capabilities` is a NULL-terminated array of UTF-8 strings.
-`em_disco` uses these to route queries to your agent.
+`em_handler_t.capabilities` is a plain array of UTF-8 strings advertised to
+the mesh; the disco computes the routing vector from them (SDKs never
+compute a vector themselves — see PROTOCOL.md § 4).
+
+---
+
+## Modes
+
+`EM_FILTER_MODE` (or `em_config_t.mode`, which takes priority):
+
+| Mode | Transport | Reachability needed |
+|------|-----------|----------------------|
+| `relay` (default) | Model B — outbound WS to each disco | None (NAT-friendly) |
+| `direct` | Model A — inbound HTTP server + gossip push | `EM_FILTER_HOST:EM_FILTER_QUERY_PORT` must be reachable from the mesh |
+| `both` | Both, same identity | Direct's, relay as fallback |
 
 ---
 
@@ -160,11 +173,14 @@ The SDK takes ownership of `result` and `new_memory` — do not free them yourse
 ### Environment variables
 
 | Variable | Default | Description |
-|----------|---------|-------------|
-| `EM_DISCO_HOST` | — | Disco broker hostname |
-| `EM_DISCO_PORT` | — | Disco broker port |
-| `EM_FILTER_JWT_TOKEN` | — | JWT for authenticated brokers |
-| `EM_FILTER_RECONNECT_MS` | `5000` | Reconnect delay in milliseconds |
+|----------|---------|--------------|
+| `EM_DISCO_HOST` / `EM_DISCO_PORT` | — | Disco node (relay target / gossip seed) |
+| `EM_FILTER_MODE` | `relay` | `relay` \| `direct` \| `both` |
+| `EM_FILTER_KEY_DIR` | `./empop_key_<name>/` | ed25519 keypair directory |
+| `EM_FILTER_HOST` | `0.0.0.0` | Advertised host for Model A (`direct`/`both`) |
+| `EM_FILTER_QUERY_PORT` | `8090` | Model A HTTP server port (`direct`/`both`) |
+| `EM_FILTER_GOSSIP_INTERVAL_MS` | `5000` | Gossip push interval (`direct`/`both`) |
+| `EM_FILTER_RECONNECT_MS` | `5000` | Model B reconnect delay |
 
 ### Node resolution order
 
@@ -177,9 +193,9 @@ The SDK takes ownership of `result` and `new_memory` — do not free them yourse
 
 | Host | Port | Transport |
 |------|------|-----------|
-| `localhost`, `127.0.0.1`, `::1` | any | `ws://` (plain) |
-| any other | 443 | `wss://` (TLS) |
-| any other | other | `ws://` (plain) |
+| `localhost`, `127.0.0.1`, `::1` | any | plain (`ws://` / `http://`) |
+| any other | 443 | TLS (`wss://` / `https://`) |
+| any other | other | plain |
 
 ### `emergence.conf`
 
@@ -197,22 +213,15 @@ Platform paths:
 ```c
 em_disco_node_t nodes[] = {
     { "disco.example.com",  443, 1 },
-    { "disco2.example.com", 443, 1 },
 };
 em_config_t config = {
-    .jwt_token = "eyJ...",
-    .nodes     = nodes,
-    .nodes_len = 2,
+    .nodes      = nodes,
+    .nodes_len  = 1,
+    .mode       = "both",
+    .query_port = 9600,
 };
+strcpy(config.advertise_host, "203.0.113.9");
 ```
-
----
-
-## Multi-node
-
-`em_filter_run()` connects to all resolved nodes simultaneously, one thread per node.
-Memory (`cJSON *`) is local to each connection — starts as an empty object and resets
-on reconnect (same as Erlang `em_filter` RAM mode).
 
 ---
 
@@ -234,37 +243,10 @@ free(clean); free(text); free(decoded); free(href);
 
 ---
 
-## WebSocket protocol
+## Protocol
 
-The agent speaks a minimal JSON-over-WebSocket protocol to `em_disco`.
-
-**Agent → Disco:**
-```json
-{ "action": "register",    "name": "<agent_name>" }
-{ "action": "agent_hello", "capabilities": ["search", "query"] }
-{ "action": "result",      "id": "<query_id>", "data": <result> }
-```
-
-**Disco → Agent:**
-```json
-{ "action": "query", "id": "<query_id>", "body": "<query_string>" }
-```
-
-The library handles the handshake and reconnection automatically.
-Your code only implements the `em_handle_fn` callback.
-
----
-
-## Example
-
-```bash
-# After building:
-./build/Release/echo_filter
-
-# With a custom broker:
-EM_DISCO_HOST=disco.example.com EM_DISCO_PORT=443 \
-EM_FILTER_JWT_TOKEN=eyJ... ./build/Release/echo_filter
-```
+See [PROTOCOL.md](PROTOCOL.md) for the full crypto + wire format (identity,
+canonical byte forms, both transports).
 
 ---
 
