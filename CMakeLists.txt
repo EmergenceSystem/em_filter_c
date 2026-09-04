@@ -15,6 +15,7 @@ add_library(em_filter STATIC
     src/config.c
     src/crypto.c
     src/identity.c
+    src/server.c
     src/websocket.c
     src/connection.c
     src/html.c
@@ -51,3 +52,7 @@ add_test(NAME test_crypto COMMAND test_crypto)
 add_executable(test_identity tests/test_identity.c)
 target_link_libraries(test_identity PRIVATE em_filter)
 add_test(NAME test_identity COMMAND test_identity)
+
+add_executable(test_server tests/test_server.c)
+target_link_libraries(test_server PRIVATE em_filter)
+add_test(NAME test_server COMMAND test_server)

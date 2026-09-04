@@ -11,3 +11,4 @@ CTestTestfile.cmake
 *.vcxproj.user
 .vs/
 test_identity_keydir/
+test_server_keydir/
